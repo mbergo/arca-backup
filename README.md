@@ -50,10 +50,38 @@ O instalador pergunta, nesta ordem:
 Para uma máquina nova, é só repetir isso: mesma senha, mesmo remote, e o `arca`
 enxerga os snapshots antigos.
 
-> **A senha é o backup.** Guarde fora da máquina — gerenciador de senhas, papel,
-> outro computador. Sem ela não existe recuperação, por ninguém, de jeito nenhum.
-> Ela fica em `~/.config/arca/password`, que é exatamente o arquivo que você
-> perde quando o disco morre.
+> **A senha é o backup.** Guarde fora da máquina. Sem ela não existe recuperação,
+> por ninguém, de jeito nenhum. Ela fica em `~/.config/arca/password` — que é
+> exatamente o arquivo que você perde quando o disco morre.
+
+### Senha no 1Password
+
+Com o [1Password CLI](https://developer.1password.com/docs/cli/) instalado:
+
+```bash
+arca op-store                 # cria o item "arca-backup" no cofre Personal
+arca op-store nome-do-item    # ou com outro nome
+```
+
+O cofre é escolhido com `ARCA_OP_VAULT` na config (padrão `Personal`).
+
+Para o `arca` ler a senha direto do 1Password, em vez do arquivo:
+
+```bash
+# em ~/.config/arca/config
+ARCA_PASSWORD_COMMAND="op read op://Personal/arca-backup/password"
+```
+
+Duas armadilhas, ambas testadas:
+
+- **Pipe não funciona.** O restic executa o comando sem shell, então
+  `op read ... | tr -d '\n'` falha. Use o comando puro — o restic já ignora a
+  quebra de linha do final.
+- **A cron não consegue.** O `op` precisa de uma sessão desbloqueada; às 3h da
+  manhã ele falha e o backup não roda. Para backup agendado, mantenha o arquivo
+  local e use o 1Password como a cópia de segurança e o caminho de restauração
+  em máquina nova. Quem quiser eliminar o arquivo precisa de um *service
+  account* do 1Password — mas aí o token dele vira o novo segredo local.
 
 ## Comandos
 
@@ -71,6 +99,7 @@ enxerga os snapshots antigos.
 | `arca drive-mount [DIR]` | monta o Drive em si, em SO que não monta sozinho |
 | `arca cron-install [HORA]` | agenda o diário |
 | `arca cron-remove` | desagenda |
+| `arca op-store [NOME]` | guarda a senha no 1Password |
 | `arca config` | mostra a configuração |
 
 ## Restauração
@@ -142,10 +171,20 @@ durante o backup completo, inclusive.
 Se a internet sofrer, use `ARCA_LIMIT_UPLOAD` na config (em KiB/s — `4096` é
 4 MiB/s). Combinado com o horário da madrugada, o backup vira invisível.
 
-## Credenciais próprias do Drive (opcional)
+## Credenciais próprias do Drive — obrigatório na prática
 
-O rclone vem com credenciais OAuth compartilhadas por todo mundo que usa a
-ferramenta, o que às vezes deixa lento. Para ter as suas:
+O rclone vem com credenciais OAuth compartilhadas por todos os usuários da
+ferramenta no mundo. Essa cota vive estourada, e numa carga de backup inicial
+você bate nela quase na certa:
+
+```
+Error 403: Quota exceeded for quota metric 'Queries' ...
+       consumer 'project_number:202264815644'     <- projeto do rclone, não o seu
+RATE_LIMIT_EXCEEDED
+```
+
+Não é a sua conta nem o seu Drive: é o projeto compartilhado. São 5 minutos para
+ter o seu, é gratuito, e resolve de vez:
 
 1. https://console.cloud.google.com — crie um projeto
 2. **APIs & Services → Library** → ative a **Google Drive API**
@@ -192,6 +231,8 @@ O padrão guarda 7 diários, 4 semanais e 12 mensais. Snapshot fora dessa janela
 | `ARCA_KEEP_DAILY/WEEKLY/MONTHLY` | 7/4/12 | retenção |
 | `ARCA_PRUNE_DAY` | `7` | dia da limpeza pesada (1=seg, 7=dom) |
 | `ARCA_TRANSFERS` | `8` | uploads em paralelo |
+| `ARCA_PASSWORD_COMMAND` | vazio | comando que devolve a senha (ex: `op read ...`) |
+| `ARCA_OP_VAULT` | `Personal` | cofre do 1Password usado pelo `op-store` |
 
 ## Licença
 
