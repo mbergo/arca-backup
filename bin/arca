@@ -202,30 +202,20 @@ case "$cmd" in
   cron-install)
     hora="${1:-03:17}"; h="${hora%%:*}"; m="${hora##*:}"
     self="$(readlink -f "$0")"
-    linha="$m $h * * * $self backup >> \$HOME/.local/state/arca.log 2>&1"
     mkdir -p "$HOME/.local/state"
-    ( crontab -l 2>/dev/null | grep -v " arca backup" ; echo "$linha" ) | crontab -
-    log "agendado todo dia às $hora — log em ~/.local/state/arca.log"
+    # flock -n: se o backup anterior ainda estiver rodando, este nem comeca
+    linha="$m $h * * * flock -n \$HOME/.local/state/arca.lock $self backup >> \$HOME/.local/state/arca.log 2>&1"
+    atual="$(crontab -l 2>/dev/null || true)"
+    novo="$(printf '%s\n' "$atual" | grep -v 'arca.lock\|arca backup' || true)"
+    printf '%s\n%s\n' "$novo" "$linha" | grep -v '^$' | crontab -
+    log "agendado todo dia as $hora — log em ~/.local/state/arca.log"
     crontab -l | grep arca
     ;;
 
   cron-remove)
-    crontab -l 2>/dev/null | grep -v " arca backup" | crontab -
+    atual="$(crontab -l 2>/dev/null || true)"
+    printf '%s\n' "$atual" | grep -v 'arca.lock\|arca backup' | grep -v '^$' | crontab - || crontab -r 2>/dev/null || true
     log "desagendado"
-    ;;
-
-  op-store)
-    command -v op >/dev/null || die "1Password CLI (op) nao instalado"
-    item="${1:-arca-backup}"
-    [[ -r "$ARCA_PASSWORD_FILE" ]] || die "nao achei $ARCA_PASSWORD_FILE para guardar"
-    log "criando o item '$item' no 1Password (cofre $ARCA_OP_VAULT)"
-    op item create --category password --title "$item" --vault "$ARCA_OP_VAULT" \
-      "password=$(cat "$ARCA_PASSWORD_FILE")" \
-      "repositorio[text]=$ARCA_REPO" \
-      "maquina[text]=$(hostname -s)" \
-      "notas[text]=Senha do repositorio restic do arca. Sem ela o backup e irrecuperavel." >/dev/null
-    log "guardado. para usar direto do 1Password, ponha na config:"
-    echo "   ARCA_PASSWORD_COMMAND=\"op read op://$ARCA_OP_VAULT/$item/password\""
     ;;
 
   config)  cat "$CONFIG" ;;
