@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# arca — backup incremental do home para a nuvem, com restic + rclone.
+# https://github.com/mbergo/arca-backup
+set -euo pipefail
+
+ARCA_VERSION="1.0.0"
+CONFIG="${ARCA_CONFIG:-$HOME/.config/arca/config}"
+
+die()  { printf 'arca: %s\n' "$*" >&2; exit 1; }
+log()  { printf '\033[1;34m>>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m!!\033[0m %s\n' "$*" >&2; }
+
+[[ -r "$CONFIG" ]] || die "config não encontrada em $CONFIG — rode o install.sh"
+# shellcheck source=/dev/null
+source "$CONFIG"
+
+: "${ARCA_REPO:?falta ARCA_REPO na config}"
+: "${ARCA_PASSWORD_FILE:?falta ARCA_PASSWORD_FILE na config}"
+: "${ARCA_SOURCE:=$HOME}"
+: "${ARCA_EXCLUDES:=$HOME/.config/arca/excludes.txt}"
+: "${ARCA_NICE:=1}"
+: "${ARCA_LIMIT_UPLOAD:=0}"        # KiB/s, 0 = sem limite
+: "${ARCA_KEEP_DAILY:=7}"
+: "${ARCA_KEEP_WEEKLY:=4}"
+: "${ARCA_KEEP_MONTHLY:=12}"
+: "${ARCA_PRUNE_DAY:=7}"           # 1=segunda .. 7=domingo
+: "${ARCA_CHUNK_SIZE:=64M}"
+: "${ARCA_TRANSFERS:=8}"
+: "${ARCA_REMOTE:=gdrive}"
+
+export RESTIC_REPOSITORY="$ARCA_REPO"
+export RESTIC_PASSWORD_FILE="$ARCA_PASSWORD_FILE"
+export RCLONE_DRIVE_CHUNK_SIZE="$ARCA_CHUNK_SIZE"
+export RCLONE_TRANSFERS="$ARCA_TRANSFERS"
+
+# Roda com prioridade baixa de CPU e de disco: não atrapalha nada em primeiro plano.
+nicely() {
+  if [[ "$ARCA_NICE" == 1 ]]; then
+    nice -n 19 ionice -c3 "$@"
+  else
+    "$@"
+  fi
+}
+
+limit_flag() {
+  [[ "$ARCA_LIMIT_UPLOAD" -gt 0 ]] 2>/dev/null && printf -- '--limit-upload=%s' "$ARCA_LIMIT_UPLOAD"
+}
+
+ensure_repo() {
+  if ! restic cat config >/dev/null 2>&1; then
+    log "repositório novo em $ARCA_REPO — inicializando"
+    restic init
+  fi
+}
+
+# Lista de pacotes instalados: o que permite refazer a máquina do zero.
+# Brew e apt não entram no backup (são gigantes e recriáveis); a receita entra.
+manifests() {
+  local m="$HOME/.config/arca/manifests"
+  mkdir -p "$m"
+  command -v brew    >/dev/null && brew bundle dump --force --file="$m/Brewfile" 2>/dev/null || true
+  command -v apt-mark>/dev/null && apt-mark showmanual > "$m/apt-manual.txt" 2>/dev/null || true
+  command -v flatpak >/dev/null && flatpak list --app --columns=application > "$m/flatpak.txt" 2>/dev/null || true
+  command -v snap    >/dev/null && snap list > "$m/snap.txt" 2>/dev/null || true
+  command -v pipx    >/dev/null && pipx list --short > "$m/pipx.txt" 2>/dev/null || true
+  command -v npm     >/dev/null && npm ls -g --depth=0 > "$m/npm-global.txt" 2>/dev/null || true
+  date > "$m/gerado-em.txt"
+}
+
+do_backup() {
+  local tag="$1"; shift || true
+  ensure_repo
+  manifests
+  log "backup ($tag) iniciado — $(date '+%F %T')"
+
+  local paths=("$ARCA_SOURCE")
+  # shellcheck disable=SC2154
+  [[ -n "${ARCA_EXTRA_PATHS:-}" ]] && read -r -a extra <<< "$ARCA_EXTRA_PATHS" && paths+=("${extra[@]}")
+
+  nicely restic backup "${paths[@]}" \
+    --exclude-file="$ARCA_EXCLUDES" \
+    --exclude-caches \
+    --one-file-system \
+    --tag "$tag" \
+    $(limit_flag) "$@"
+
+  log "aplicando retenção (${ARCA_KEEP_DAILY}d / ${ARCA_KEEP_WEEKLY}s / ${ARCA_KEEP_MONTHLY}m)"
+  local prune=()
+  [[ "$(date +%u)" == "$ARCA_PRUNE_DAY" ]] && { prune=(--prune); log "hoje é dia de prune (libera espaço de verdade)"; }
+  nicely restic forget \
+    --keep-daily "$ARCA_KEEP_DAILY" \
+    --keep-weekly "$ARCA_KEEP_WEEKLY" \
+    --keep-monthly "$ARCA_KEEP_MONTHLY" \
+    "${prune[@]}"
+
+  log "fim — $(date '+%F %T')"
+  restic snapshots --latest 3 2>/dev/null || true
+}
+
+usage() {
+  cat <<'HELP'
+arca — backup incremental do home, restic + rclone
+
+  arca full                 primeiro backup (completo, em prioridade baixa)
+  arca backup               backup incremental (o que a cron roda todo dia)
+  arca snapshots            lista os pontos no tempo salvos
+  arca status               último backup, tamanho e saúde do repositório
+  arca check                verifica integridade (lê 5% dos dados)
+  arca find <padrão>        procura um arquivo em todos os snapshots
+  arca restore [opções]     restaura (padrão: último snapshot em /tmp/arca-restore)
+      --target DIR          onde colocar         (padrão: /tmp/arca-restore)
+      --snapshot ID         qual ponto no tempo  (padrão: latest)
+      --include CAMINHO     só esse caminho      (pode repetir)
+  arca mount [DIR]          monta os backups como pasta e navega (ctrl+c sai)
+  arca drive-setup          cria/refaz o remote do Google Drive no rclone
+  arca drive-mount [DIR]    monta o Drive em si (SO sem montagem automática)
+  arca cron-install [HORA]  agenda o diário (padrão: 03:17)
+  arca cron-remove          desagenda
+  arca config               mostra a configuração atual
+  arca version
+
+Config: ~/.config/arca/config   Excludes: ~/.config/arca/excludes.txt
+HELP
+}
+
+cmd="${1:-backup}"; shift || true
+case "$cmd" in
+  full)      do_backup full "$@" ;;
+  backup|incremental) do_backup diario "$@" ;;
+  snapshots) restic snapshots "$@" ;;
+  check)     log "verificando integridade"; nicely restic check --read-data-subset=5% ;;
+  find)      [[ $# -gt 0 ]] || die "uso: arca find <padrão>"; restic find "$@" ;;
+
+  status)
+    restic snapshots --latest 1 2>/dev/null || die "repositório inacessível"
+    echo; log "tamanho no Drive"
+    rclone size "${ARCA_REPO#rclone:}" 2>/dev/null || true
+    ;;
+
+  restore)
+    target="/tmp/arca-restore"; snap="latest"; inc=()
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --target)   target="$2"; shift 2 ;;
+        --snapshot) snap="$2";   shift 2 ;;
+        --include)  inc+=(--include "$2"); shift 2 ;;
+        *) die "opção desconhecida: $1" ;;
+      esac
+    done
+    mkdir -p "$target"
+    log "restaurando $snap para $target"
+    restic restore "$snap" --target "$target" "${inc[@]}"
+    log "pronto: $target"
+    ;;
+
+  mount)
+    dir="${1:-/tmp/arca}"; mkdir -p "$dir"
+    log "montando snapshots em $dir (ctrl+c para desmontar)"
+    restic mount "$dir"
+    ;;
+
+  drive-setup)
+    cid=""; csec=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --client-id)     cid="$2";  shift 2 ;;
+        --client-secret) csec="$2"; shift 2 ;;
+        *) die "opção desconhecida: $1" ;;
+      esac
+    done
+    args=(config create "$ARCA_REMOTE" drive scope=drive)
+    [[ -n "$cid"  ]] && args+=("client_id=$cid")
+    [[ -n "$csec" ]] && args+=("client_secret=$csec")
+    log "abrindo o navegador para autorizar o Google Drive"
+    rclone "${args[@]}"
+    log "remote '$ARCA_REMOTE' pronto"
+    ;;
+
+  drive-mount)
+    dir="${1:-$HOME/GoogleDrive}"; mkdir -p "$dir"
+    rclone listremotes | grep -qx "${ARCA_REMOTE}:" || die "remote '$ARCA_REMOTE' não existe — rode: arca drive-setup"
+    log "montando ${ARCA_REMOTE}: em $dir (em segundo plano)"
+    rclone mount "${ARCA_REMOTE}:" "$dir" \
+      --vfs-cache-mode writes --daemon --dir-cache-time 24h
+    sleep 2
+    mountpoint -q "$dir" && log "montado. para desmontar: fusermount -u $dir" || warn "não montou — veja: rclone mount ${ARCA_REMOTE}: $dir"
+    ;;
+
+  cron-install)
+    hora="${1:-03:17}"; h="${hora%%:*}"; m="${hora##*:}"
+    self="$(readlink -f "$0")"
+    linha="$m $h * * * $self backup >> \$HOME/.local/state/arca.log 2>&1"
+    mkdir -p "$HOME/.local/state"
+    ( crontab -l 2>/dev/null | grep -v " arca backup" ; echo "$linha" ) | crontab -
+    log "agendado todo dia às $hora — log em ~/.local/state/arca.log"
+    crontab -l | grep arca
+    ;;
+
+  cron-remove)
+    crontab -l 2>/dev/null | grep -v " arca backup" | crontab -
+    log "desagendado"
+    ;;
+
+  config)  cat "$CONFIG" ;;
+  version) echo "arca $ARCA_VERSION"; restic version; rclone version | head -1 ;;
+  -h|--help|help) usage ;;
+  *) usage; exit 1 ;;
+esac

@@ -1,0 +1,66 @@
+# ── Browsers: sockets e locks que TRAVAM qualquer copia ──────────────────────
+**/SingletonLock
+**/SingletonSocket
+**/SingletonCookie
+**/lock
+**/.parentlock
+**/*.sock
+**/.gvfs
+
+# ── Caches (recriaveis, dominam o tempo de backup) ───────────────────────────
+__HOME__/.cache
+__HOME__/.local/share/Trash
+__HOME__/.thumbnails
+**/Cache
+**/Code Cache
+**/GPUCache
+**/ShaderCache
+**/CachedData
+**/Service Worker/CacheStorage
+**/.cache
+
+# ── Dev: reinstalavel com um comando ─────────────────────────────────────────
+**/node_modules
+**/.venv
+**/venv
+**/__pycache__
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/target/debug
+**/target/release
+**/.gradle
+**/.m2/repository
+__HOME__/.nvm
+__HOME__/.rustup
+__HOME__/go/pkg
+__HOME__/.cargo/registry
+
+# ── Containers, VMs e afins ──────────────────────────────────────────────────
+__HOME__/.local/share/containers
+__HOME__/.local/share/docker
+__HOME__/.docker/desktop
+__HOME__/.vagrant.d
+__HOME__/VirtualBox VMs
+**/*.vdi
+**/*.qcow2
+**/*.iso
+
+# ── Snap/Flatpak: so o cache ─────────────────────────────────────────────────
+__HOME__/snap/*/common/.cache
+__HOME__/.var/app/*/cache
+
+# ── Especificos desta maquina ────────────────────────────────────────────────
+__HOME__/.config/coderv2/postgres
+__HOME__/.dotnet
+
+# ── Gerenciadores de pacote: a receita vai em manifests/, os binarios nao ────
+/home/linuxbrew
+**/.linuxbrew
+**/Homebrew
+
+# ── O proprio backup ────────────────────────────────────────────────────────
+**/.config/arca/password
+
+# ── Pesado e adiavel (tire o # se quiser no backup) ─────────────────────────
+__HOME__/Downloads
