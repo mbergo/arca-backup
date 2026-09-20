@@ -54,34 +54,31 @@ enxerga os snapshots antigos.
 > por ninguém, de jeito nenhum. Ela fica em `~/.config/arca/password` — que é
 > exatamente o arquivo que você perde quando o disco morre.
 
-### Senha no 1Password
+### Senha num gerenciador de senhas
 
-Com o [1Password CLI](https://developer.1password.com/docs/cli/) instalado:
-
-```bash
-arca op-store                 # cria o item "arca-backup" no cofre Personal
-arca op-store nome-do-item    # ou com outro nome
-```
-
-O cofre é escolhido com `ARCA_OP_VAULT` na config (padrão `Personal`).
-
-Para o `arca` ler a senha direto do 1Password, em vez do arquivo:
+O `arca` aceita pegar a senha de um comando qualquer, em vez do arquivo local.
+Basta que o comando imprima a senha na saída padrão:
 
 ```bash
-# em ~/.config/arca/config
+# em ~/.config/arca/config — escolha um
+ARCA_PASSWORD_COMMAND="pass show arca/backup"
+ARCA_PASSWORD_COMMAND="gpg --quiet --decrypt ~/.arca-pass.gpg"
+ARCA_PASSWORD_COMMAND="secret-tool lookup service arca"
 ARCA_PASSWORD_COMMAND="op read op://Personal/arca-backup/password"
 ```
+
+Para quem usa 1Password, `arca op-store` cria o item de uma vez (o cofre sai de
+`ARCA_OP_VAULT`, padrão `Personal`).
 
 Duas armadilhas, ambas testadas:
 
 - **Pipe não funciona.** O restic executa o comando sem shell, então
-  `op read ... | tr -d '\n'` falha. Use o comando puro — o restic já ignora a
+  `comando | tr -d '\n'` falha. Use o comando puro — o restic já ignora a
   quebra de linha do final.
-- **A cron não consegue.** O `op` precisa de uma sessão desbloqueada; às 3h da
-  manhã ele falha e o backup não roda. Para backup agendado, mantenha o arquivo
-  local e use o 1Password como a cópia de segurança e o caminho de restauração
-  em máquina nova. Quem quiser eliminar o arquivo precisa de um *service
-  account* do 1Password — mas aí o token dele vira o novo segredo local.
+- **A cron não consegue destravar o cofre.** Gerenciador de senhas precisa de
+  sessão desbloqueada; às 3h da manhã ele falha e o backup não roda. Para backup
+  agendado, mantenha o arquivo local e use o gerenciador como a cópia de
+  segurança e o caminho de restauração em máquina nova.
 
 ## Comandos
 
